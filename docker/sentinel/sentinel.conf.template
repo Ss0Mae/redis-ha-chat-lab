@@ -1,0 +1,11 @@
+port 26379
+bind 0.0.0.0
+protected-mode no
+sentinel resolve-hostnames yes
+sentinel announce-hostnames no
+sentinel monitor chat-primary 172.28.1.11 6379 2
+sentinel down-after-milliseconds chat-primary __DOWN_AFTER__
+sentinel failover-timeout chat-primary __FAILOVER_TIMEOUT__
+sentinel parallel-syncs chat-primary 1
+sentinel master-reboot-down-after-period chat-primary __REBOOT_DOWN__
+loglevel notice

@@ -1,0 +1,37 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.5.16'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.seongmin'
+version = '0.1.0'
+
+java {
+	toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.apache.commons:commons-pool2'   // Lettuce 커넥션 풀 변형(REDIS_POOL_ENABLED=true)
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+	runtimeOnly 'com.mysql:mysql-connector-j'
+	// epoll 네이티브 전송: TCP_USER_TIMEOUT(응답 없는 연결을 커널이 끊음)을 쓰려면 필요. 컨테이너(linux/arm64, x86_64) 둘 다 포함.
+	runtimeOnly 'io.netty:netty-transport-native-epoll::linux-aarch_64'
+	runtimeOnly 'io.netty:netty-transport-native-epoll::linux-x86_64'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.awaitility:awaitility'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+	systemProperty 'lab.integration', System.getProperty('lab.integration', '')
+}

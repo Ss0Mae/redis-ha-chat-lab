@@ -1,0 +1,179 @@
+# Redis Sentinel vs Cluster 실험 스택. 프로필: single | sentinel | cluster (한 번에 하나만).
+#   LAB_TOPOLOGY=sentinel docker compose --profile sentinel up -d --build
+# 노드는 고정 IP 를 쓴다(재시작 후에도 Sentinel/Cluster 가 같은 주소를 보도록, iptables 규칙도 IP 기준).
+name: redis-ha-chat-lab
+
+x-redis: &redis
+  image: redis:7.4
+  cpus: 1.0
+  mem_limit: 512m
+  volumes: ["./docker/redis/redis.conf:/conf/redis.conf:ro", "./docker/redis/entrypoint.sh:/conf/entrypoint.sh:ro"]
+  entrypoint: ["/conf/entrypoint.sh"]
+  healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, timeout: 1s, retries: 15 }
+  logging: { driver: json-file, options: { max-size: "20m" } }
+
+x-sentinel: &sentinel
+  image: redis:7.4
+  cpus: 0.5
+  mem_limit: 128m
+  entrypoint: ["/conf/entrypoint.sh"]
+  environment: { DOWN_AFTER: "${SENTINEL_DOWN_AFTER:-5000}", FAILOVER_TIMEOUT: "${SENTINEL_FAILOVER_TIMEOUT:-20000}", REBOOT_DOWN: "${SENTINEL_REBOOT_DOWN:-0}" }
+  volumes: ["./docker/sentinel/sentinel.conf.template:/conf/sentinel.conf.template:ro", "./docker/sentinel/entrypoint.sh:/conf/entrypoint.sh:ro"]
+
+x-fault: &fault
+  build: ./docker/fault-agent
+  image: lab-fault-agent
+  cap_add: [NET_ADMIN]
+  mem_limit: 32m
+
+x-cluster-cmd: &cluster-cmd
+  ["--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf",
+   "--cluster-node-timeout", "${CLUSTER_NODE_TIMEOUT:-5000}", "--cluster-require-full-coverage", "${CLUSTER_FULL_COVERAGE:-yes}",
+   "--cluster-replica-validity-factor", "0", "--cluster-allow-reads-when-down", "${CLUSTER_READS_WHEN_DOWN:-no}"]
+
+volumes:
+  lab-mysql-data: {}
+
+networks:
+  lab-net:
+    driver: bridge
+    ipam: { config: [{ subnet: 172.28.0.0/16 }] }
+
+services:
+  # ---------- 공통 ----------
+  mysql:
+    image: mysql:8.0
+    container_name: lab-mysql
+    environment: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: lab, MYSQL_USER: lab, MYSQL_PASSWORD: lab }
+    command: ["--innodb-flush-log-at-trx-commit=2", "--max-connections=200"]
+    ports: ["3309:3306"]
+    volumes: ["lab-mysql-data:/var/lib/mysql"]
+    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h127.0.0.1", "-proot"], interval: 3s, timeout: 3s, retries: 30 }
+    networks: { lab-net: { ipv4_address: 172.28.0.20 } }
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: lab-prometheus
+    volumes: ["./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9093:9090"]
+    networks: { lab-net: { ipv4_address: 172.28.0.30 } }
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: lab-grafana
+    environment: { GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Admin, GF_SECURITY_ADMIN_PASSWORD: admin }
+    volumes: ["./docker/grafana/provisioning:/etc/grafana/provisioning:ro", "./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro"]
+    ports: ["3003:3000"]
+    networks: { lab-net: { ipv4_address: 172.28.0.31 } }
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.66.0
+    container_name: lab-redis-exporter
+    networks: { lab-net: { ipv4_address: 172.28.0.32 } }
+  socket-proxy:
+    # Docker 소켓은 이 프록시 안에서만 열린다. 허용 엔드포인트: containers(+exec, stop/kill/start/pause). 호스트에 포트를 공개하지 않는다.
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: lab-socket-proxy
+    environment: { CONTAINERS: "1", POST: "1", EXEC: "1", INFO: "0", IMAGES: "0", NETWORKS: "0", VOLUMES: "0", SERVICES: "0", TASKS: "0", BUILD: "0", COMMIT: "0", CONFIGS: "0", DISTRIBUTION: "0", NODES: "0", PLUGINS: "0", SECRETS: "0", SESSION: "0", SWARM: "0", SYSTEM: "0", ALLOW_RESTARTS: "1" }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: { lab-net: { ipv4_address: 172.28.0.40 } }
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: lab-toxiproxy
+    command: ["-host", "0.0.0.0", "-config", "/conf/toxiproxy.json"]
+    volumes: ["./docker/toxiproxy/toxiproxy.json:/conf/toxiproxy.json:ro"]
+    ports: ["8474:8474"]
+    networks: { lab-net: { ipv4_address: 172.28.0.50 } }
+  app:
+    build: .
+    image: lab-app
+    container_name: lab-app
+    cpus: 2.0
+    mem_limit: 1g
+    environment:
+      SPRING_PROFILES_ACTIVE: "${LAB_TOPOLOGY:-single},local-experiment"
+      LAB_TOPOLOGY: "${LAB_TOPOLOGY:-single}"
+      LAB_ADMIN_TOKEN: "${LAB_ADMIN_TOKEN:-lab-admin}"
+      TZ: Asia/Seoul
+      # 비교 실험용 변형(셸 env → 컨테이너). 기본값은 application*.yml 과 같다.
+      REDIS_COMMAND_TIMEOUT: "${REDIS_COMMAND_TIMEOUT:-1s}"
+      REDIS_CONNECT_TIMEOUT: "${REDIS_CONNECT_TIMEOUT:-1s}"
+      REDIS_POOL_ENABLED: "${REDIS_POOL_ENABLED:-false}"
+      REDIS_MAX_REDIRECTS: "${REDIS_MAX_REDIRECTS:-3}"
+      LAB_RETRY: "${LAB_RETRY:-none}"
+      LAB_WAIT_REPLICAS: "${LAB_WAIT_REPLICAS:-0}"
+      LAB_WAIT_TIMEOUT_MS: "${LAB_WAIT_TIMEOUT_MS:-1000}"
+      LAB_MAX_FAULT_SECONDS: "${LAB_MAX_FAULT_SECONDS:-180}"
+      LETTUCE_DISCONNECTED: "${LETTUCE_DISCONNECTED:-DEFAULT}"
+      LETTUCE_REPLAY_NON_IDEMPOTENT: "${LETTUCE_REPLAY_NON_IDEMPOTENT:-true}"
+      LETTUCE_TCP_USER_TIMEOUT: "${LETTUCE_TCP_USER_TIMEOUT:-0s}"
+      LETTUCE_KEEPALIVE: "${LETTUCE_KEEPALIVE:-false}"
+      LETTUCE_READ_FROM: "${LETTUCE_READ_FROM:-}"
+      LETTUCE_ADAPTIVE_REFRESH: "${LETTUCE_ADAPTIVE_REFRESH:-true}"
+      LETTUCE_PERIODIC_REFRESH: "${LETTUCE_PERIODIC_REFRESH:-true}"
+      LETTUCE_REFRESH_PERIOD: "${LETTUCE_REFRESH_PERIOD:-5s}"
+      LETTUCE_ADAPTIVE_TIMEOUT: "${LETTUCE_ADAPTIVE_TIMEOUT:-30s}"
+      LETTUCE_RECONNECT_TRIGGER: "${LETTUCE_RECONNECT_TRIGGER:-5}"
+    ports: ["8085:8080"]
+    depends_on: { mysql: { condition: service_healthy } }
+    networks: { lab-net: { ipv4_address: 172.28.0.100 } }
+
+  # ---------- single ----------
+  r-0:
+    <<: *redis
+    container_name: r-0
+    command: []
+    ports: ["6380:6379"]
+    networks: { lab-net: { ipv4_address: 172.28.0.11 } }
+    profiles: [single]
+  fault-r-0: { <<: *fault, container_name: fault-r-0, network_mode: "service:r-0", depends_on: [r-0], profiles: [single] }
+
+  # ---------- sentinel: Primary 1 + Replica 2 + Sentinel 3 ----------
+  r-a-1:
+    <<: *redis
+    container_name: r-a-1
+    command: []
+    ports: ["6390:6379"]
+    networks: { lab-net: { ipv4_address: 172.28.1.11 } }
+    profiles: [sentinel]
+  r-a-2:
+    <<: *redis
+    container_name: r-a-2
+    command: []
+    environment: { REPLICAOF: "172.28.1.11 6379" }
+    ports: ["6391:6379"]
+    networks: { lab-net: { ipv4_address: 172.28.1.12 } }
+    profiles: [sentinel]
+  r-a-3:
+    <<: *redis
+    container_name: r-a-3
+    command: []
+    environment: { REPLICAOF: "172.28.1.11 6379" }
+    ports: ["6392:6379"]
+    networks: { lab-net: { ipv4_address: 172.28.1.13 } }
+    profiles: [sentinel]
+  s-1: { <<: *sentinel, container_name: s-1, ports: ["26390:26379"], networks: { lab-net: { ipv4_address: 172.28.1.21 } }, depends_on: [r-a-1], profiles: [sentinel] }
+  s-2: { <<: *sentinel, container_name: s-2, ports: ["26391:26379"], networks: { lab-net: { ipv4_address: 172.28.1.22 } }, depends_on: [r-a-1], profiles: [sentinel] }
+  s-3: { <<: *sentinel, container_name: s-3, ports: ["26392:26379"], networks: { lab-net: { ipv4_address: 172.28.1.23 } }, depends_on: [r-a-1], profiles: [sentinel] }
+  fault-r-a-1: { <<: *fault, container_name: fault-r-a-1, network_mode: "service:r-a-1", depends_on: [r-a-1], profiles: [sentinel] }
+  fault-r-a-2: { <<: *fault, container_name: fault-r-a-2, network_mode: "service:r-a-2", depends_on: [r-a-2], profiles: [sentinel] }
+  fault-r-a-3: { <<: *fault, container_name: fault-r-a-3, network_mode: "service:r-a-3", depends_on: [r-a-3], profiles: [sentinel] }
+
+  # ---------- cluster: Primary 3 + Replica 3 ----------
+  c-1: { <<: *redis, container_name: c-1, command: *cluster-cmd, ports: ["7100:6379"], networks: { lab-net: { ipv4_address: 172.28.2.11 } }, profiles: [cluster] }
+  c-2: { <<: *redis, container_name: c-2, command: *cluster-cmd, ports: ["7101:6379"], networks: { lab-net: { ipv4_address: 172.28.2.12 } }, profiles: [cluster] }
+  c-3: { <<: *redis, container_name: c-3, command: *cluster-cmd, ports: ["7102:6379"], networks: { lab-net: { ipv4_address: 172.28.2.13 } }, profiles: [cluster] }
+  c-4: { <<: *redis, container_name: c-4, command: *cluster-cmd, ports: ["7103:6379"], networks: { lab-net: { ipv4_address: 172.28.2.14 } }, profiles: [cluster] }
+  c-5: { <<: *redis, container_name: c-5, command: *cluster-cmd, ports: ["7104:6379"], networks: { lab-net: { ipv4_address: 172.28.2.15 } }, profiles: [cluster] }
+  c-6: { <<: *redis, container_name: c-6, command: *cluster-cmd, ports: ["7105:6379"], networks: { lab-net: { ipv4_address: 172.28.2.16 } }, profiles: [cluster] }
+  cluster-init:
+    image: redis:7.4
+    container_name: lab-cluster-init
+    entrypoint: ["/conf/init.sh"]
+    volumes: ["./docker/cluster/init.sh:/conf/init.sh:ro"]
+    depends_on: [c-1, c-2, c-3, c-4, c-5, c-6]
+    networks: { lab-net: { ipv4_address: 172.28.2.2 } }
+    profiles: [cluster]
+  fault-c-1: { <<: *fault, container_name: fault-c-1, network_mode: "service:c-1", depends_on: [c-1], profiles: [cluster] }
+  fault-c-2: { <<: *fault, container_name: fault-c-2, network_mode: "service:c-2", depends_on: [c-2], profiles: [cluster] }
+  fault-c-3: { <<: *fault, container_name: fault-c-3, network_mode: "service:c-3", depends_on: [c-3], profiles: [cluster] }
+  fault-c-4: { <<: *fault, container_name: fault-c-4, network_mode: "service:c-4", depends_on: [c-4], profiles: [cluster] }
+  fault-c-5: { <<: *fault, container_name: fault-c-5, network_mode: "service:c-5", depends_on: [c-5], profiles: [cluster] }
+  fault-c-6: { <<: *fault, container_name: fault-c-6, network_mode: "service:c-6", depends_on: [c-6], profiles: [cluster] }

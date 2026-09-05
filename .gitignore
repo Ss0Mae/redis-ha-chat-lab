@@ -1,0 +1,10 @@
+build/
+.gradle/
+results/
+web/node_modules/
+web/dist/
+.venv/
+*.log
+.DS_Store
+.idea/
+*.iml

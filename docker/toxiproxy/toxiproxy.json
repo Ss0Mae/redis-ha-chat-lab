@@ -1,0 +1,5 @@
+[
+  { "name": "sentinel-1", "listen": "0.0.0.0:26379", "upstream": "172.28.1.21:26379", "enabled": true },
+  { "name": "sentinel-2", "listen": "0.0.0.0:26380", "upstream": "172.28.1.22:26379", "enabled": true },
+  { "name": "sentinel-3", "listen": "0.0.0.0:26381", "upstream": "172.28.1.23:26379", "enabled": true }
+]

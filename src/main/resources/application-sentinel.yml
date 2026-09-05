@@ -1,0 +1,4 @@
+spring.data.redis:
+  sentinel:
+    master: chat-primary
+    nodes: ${REDIS_SENTINEL_NODES:172.28.1.21:26379,172.28.1.22:26379,172.28.1.23:26379}

@@ -1,0 +1,45 @@
+spring:
+  application.name: redis-ha-chat-lab
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://172.28.0.20:3306/lab?useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&serverTimezone=Asia/Seoul}
+    username: lab
+    password: lab
+    hikari: { maximum-pool-size: 4 }
+  sql.init: { mode: always, continue-on-error: false }
+  data.redis:
+    timeout: ${REDIS_COMMAND_TIMEOUT:1s}
+    connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
+    lettuce:
+      shutdown-timeout: 200ms
+      pool:
+        enabled: ${REDIS_POOL_ENABLED:false}
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+server:
+  port: 8080
+  tomcat: { threads: { max: 200 } }
+management:
+  endpoints.web.exposure.include: health,prometheus,metrics
+  metrics.distribution.percentiles-histogram:
+    redis.command.duration: true
+    workload.request.duration: true
+    http.server.requests: true
+lab:
+  topology: ${LAB_TOPOLOGY:single}
+  admin-token: ${LAB_ADMIN_TOKEN:lab-admin}
+  docker-api: ${LAB_DOCKER_API:http://172.28.0.40:2375}
+  toxiproxy-api: ${LAB_TOXIPROXY_API:http://172.28.0.50:8474}
+  max-fault-seconds: ${LAB_MAX_FAULT_SECONDS:180}
+  retry: ${LAB_RETRY:none}                    # none | reads | all  (앱 레벨 1회 재시도)
+  wait-replicas: ${LAB_WAIT_REPLICAS:0}       # 쓰기 후 WAIT <n> <timeout>. 0 이면 사용 안 함
+  wait-timeout-ms: ${LAB_WAIT_TIMEOUT_MS:1000}
+  lettuce:
+    disconnected-behavior: ${LETTUCE_DISCONNECTED:DEFAULT}   # DEFAULT(끊긴 동안 큐잉) | REJECT_COMMANDS
+    replay-non-idempotent: ${LETTUCE_REPLAY_NON_IDEMPOTENT:true}  # 재연결 시 INCR/EVALSHA 등도 재전송(Lettuce 기본)
+    tcp-user-timeout: ${LETTUCE_TCP_USER_TIMEOUT:0s}   # 0 = 사용 안 함. 예 3s: 상대가 ACK 하지 않으면 커널이 연결을 끊어 재연결(=Sentinel 재조회)을 유도
+    keep-alive: ${LETTUCE_KEEPALIVE:false}
+    read-from: ${LETTUCE_READ_FROM:}                    # 비우면 기본(단일 연결). UPSTREAM 이면 MasterReplica 연결 → Sentinel +switch-master 를 구독해 즉시 전환
+logging.level:
+  root: WARN
+  com.seongmin.redislab: INFO

@@ -1,0 +1,5 @@
+# 앱 ↔ Sentinel 경로만 Toxiproxy(172.28.0.50)를 거치는 변형. Redis 노드 주소는 Sentinel 이 알려주므로 프록시를 지나지 않는다.
+spring.data.redis:
+  sentinel:
+    master: chat-primary
+    nodes: 172.28.0.50:26379,172.28.0.50:26380,172.28.0.50:26381

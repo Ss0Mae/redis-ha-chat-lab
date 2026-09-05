@@ -1,0 +1,12 @@
+spring.data.redis:
+  cluster:
+    nodes: ${REDIS_CLUSTER_NODES:172.28.2.11:6379,172.28.2.12:6379,172.28.2.13:6379}
+    max-redirects: ${REDIS_MAX_REDIRECTS:3}
+  lettuce.cluster.refresh:
+    adaptive: ${LETTUCE_ADAPTIVE_REFRESH:true}
+    period: ${LETTUCE_REFRESH_PERIOD:5s}        # 비우면 주기 갱신 없음
+    dynamic-refresh-sources: true
+lab.lettuce:
+  periodic-refresh: ${LETTUCE_PERIODIC_REFRESH:true}
+  adaptive-timeout: ${LETTUCE_ADAPTIVE_TIMEOUT:30s}   # adaptiveRefreshTriggersTimeout (Lettuce 기본 30 s)
+  reconnect-attempts-trigger: ${LETTUCE_RECONNECT_TRIGGER:5}
